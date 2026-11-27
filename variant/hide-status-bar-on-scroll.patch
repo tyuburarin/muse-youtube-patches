@@ -1,0 +1,160 @@
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/HideStatusBarPatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/HideStatusBarPatch.java
+index 4d8c80e..c1da082 100644
+--- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/HideStatusBarPatch.java
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/HideStatusBarPatch.java
+@@ -50,6 +50,13 @@ public final class HideStatusBarPatch {
+ 
+     private static final boolean FIX_STATUS_BAR_LAYOUT = Settings.FIX_STATUS_BAR_LAYOUT.get();
+ 
++    private static final boolean HIDE_STATUS_BAR_ON_SCROLL = Settings.HIDE_STATUS_BAR_ON_SCROLL.get();
++
++    /**
++     * If the status bar is currently hidden by scrolling, accessed only on the main thread.
++     */
++    private static boolean statusBarHiddenOnScroll;
++
+     /**
+      * If the edge to edge top bar feature flag is turned off for the whole session even if it is
+      * not read yet: with the status bar layout fix, and the status bar hidden or the window laid out
+@@ -423,6 +430,50 @@ public final class HideStatusBarPatch {
+         }
+     }
+ 
++    /**
++     * Called by {@link NavigationBarPatch} on the main thread when it hides or shows
++     * the navigation bar while a list is scrolling, so the status bar follows it.
++     * Does nothing if the status bar is always hidden, as it then stays hidden.
++     *
++     * @param view Any view of the window whose status bar is hidden or shown.
++     * @param hide If the status bar is hidden.
++     */
++    public static void setStatusBarHiddenOnScroll(@Nullable View view, boolean hide) {
++        if (!HIDE_STATUS_BAR_ON_SCROLL || HIDE_STATUS_BAR) {
++            return;
++        }
++        // Not skipped if the state is unchanged: the app can show the status bar
++        // again on its own (for example after fullscreen), so the call re-applies it.
++        statusBarHiddenOnScroll = hide;
++        if (view == null) {
++            return;
++        }
++
++        try {
++            View decorView = view.getRootView();
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++                WindowInsetsController controller = decorView.getWindowInsetsController();
++                if (controller != null) {
++                    if (hide) {
++                        controller.setSystemBarsBehavior(
++                                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
++                        controller.hide(WindowInsets.Type.statusBars());
++                    } else {
++                        controller.show(WindowInsets.Type.statusBars());
++                    }
++                }
++            } else if (hide) {
++                decorView.setSystemUiVisibility(decorView.getSystemUiVisibility()
++                        | View.SYSTEM_UI_FLAG_FULLSCREEN);
++            } else {
++                decorView.setSystemUiVisibility(decorView.getSystemUiVisibility()
++                        & ~View.SYSTEM_UI_FLAG_FULLSCREEN);
++            }
++        } catch (Exception ex) {
++            Logger.printException(() -> "setStatusBarHiddenOnScroll failure", ex);
++        }
++    }
++
+     /**
+      * The app shows the status bar again after fullscreen and some dialogs,
+      * so it is hidden again whenever the window is laid out with it visible.
+@@ -446,7 +497,7 @@ public final class HideStatusBarPatch {
+      * so when the status bar is hidden it covers the search bar and channel page top bar.
+      */
+     public static void hideStatusBarBackground(View view) {
+-        if (HIDE_STATUS_BAR) {
++        if (HIDE_STATUS_BAR || statusBarHiddenOnScroll) {
+             view.setVisibility(View.INVISIBLE);
+         }
+     }
+@@ -465,7 +516,7 @@ public final class HideStatusBarPatch {
+      * stay aligned with the player below the cutout.
+      */
+     public static void setSystemWindowInsetTop(Rect systemWindowInsets, @Nullable View view) {
+-        if (view == null || !HIDE_STATUS_BAR) {
++        if (view == null || (!HIDE_STATUS_BAR && !statusBarHiddenOnScroll)) {
+             return;
+         }
+ 
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/NavigationBarPatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/NavigationBarPatch.java
+index 486f80e..d4b5ed8 100644
+--- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/NavigationBarPatch.java
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/NavigationBarPatch.java
+@@ -336,6 +336,11 @@ public final class NavigationBarPatch {
+      */
+     private static final boolean HIDE_NAVIGATION_BAR_ON_SCROLL = !DISABLE_AUTO_HIDE_NAVIGATION_BAR && !HIDE_NAVIGATION_BAR;
+ 
++    /**
++     * If the status bar is hidden together with the navigation bar while scrolling the pages.
++     */
++    private static final boolean HIDE_STATUS_BAR_ON_SCROLL = Settings.HIDE_STATUS_BAR_ON_SCROLL.get();
++
+     private static final long NAVIGATION_BAR_SCROLL_ANIMATION_MILLISECONDS = 250;
+ 
+     /**
+@@ -509,6 +514,9 @@ public final class NavigationBarPatch {
+      */
+     private static void animateNavigationBarOnScroll(View container, View list, boolean hide) {
+         navigationBarHiddenOnScroll = hide;
++        if (HIDE_STATUS_BAR_ON_SCROLL) {
++            HideStatusBarPatch.setStatusBarHiddenOnScroll(container, hide);
++        }
+         ObjectAnimator running = navigationBarScrollAnimator;
+         if (running != null) {
+             running.cancel();
+@@ -567,6 +575,9 @@ public final class NavigationBarPatch {
+             if (container != null) {
+                 container.setTranslationY(0);
+                 container.setVisibility(View.VISIBLE);
++                if (HIDE_STATUS_BAR_ON_SCROLL) {
++                    HideStatusBarPatch.setStatusBarHiddenOnScroll(container, false);
++                }
+             }
+         } catch (Exception ex) {
+             Logger.printException(() -> "showNavigationBarHiddenOnScroll failure", ex);
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
+index 802f0df..0178633 100644
+--- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
+@@ -722,6 +722,7 @@ public class Settings extends SharedYouTubeSettings {
+     public static final EnumSetting<StartPage> CHANGE_START_PAGE = new EnumSetting<>("morphe_change_start_page", StartPage.DEFAULT, true);
+     public static final BooleanSetting HIDE_STATUS_BAR = new BooleanSetting("morphe_hide_status_bar", FALSE, true);
+     public static final BooleanSetting HIDE_STATUS_BAR_AVOID_CUTOUT = new BooleanSetting("morphe_hide_status_bar_avoid_cutout", FALSE, true, parent(HIDE_STATUS_BAR));
++    public static final BooleanSetting HIDE_STATUS_BAR_ON_SCROLL = new BooleanSetting("morphe_hide_status_bar_on_scroll", FALSE, true);
+     public static final BooleanSetting FIX_STATUS_BAR_LAYOUT = new BooleanSetting("morphe_fix_status_bar_layout", TRUE, true);
+     public static final BooleanSetting WINDOW_BELOW_STATUS_BAR = new BooleanSetting("morphe_window_below_status_bar", FALSE, false, false);
+     public static final BooleanSetting WINDOW_ABOVE_NAVIGATION_BAR = new BooleanSetting("morphe_window_above_navigation_bar", FALSE, false, false);
+diff --git a/patches/src/main/kotlin/app/morphe/patches/youtube/layout/statusbar/HideStatusBarPatch.kt b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/statusbar/HideStatusBarPatch.kt
+index bfb6af9..f85700f 100644
+--- a/patches/src/main/kotlin/app/morphe/patches/youtube/layout/statusbar/HideStatusBarPatch.kt
++++ b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/statusbar/HideStatusBarPatch.kt
+@@ -44,6 +44,7 @@ val hideStatusBarPatch = patch(
+     execute {
+         PreferenceScreen.GENERAL.addPreferences(
+             SwitchPreference("morphe_hide_status_bar", summary = true),
++            SwitchPreference("morphe_hide_status_bar_on_scroll", summary = true),
+             SwitchPreference("morphe_hide_status_bar_avoid_cutout", summary = true),
+             SwitchPreference("morphe_fix_status_bar_layout", summary = true)
+         )
+diff --git a/patches/src/main/resources/addresources/values/youtube/strings.xml b/patches/src/main/resources/addresources/values/youtube/strings.xml
+index b4f21f8..f2cf449 100644
+--- a/patches/src/main/resources/addresources/values/youtube/strings.xml
++++ b/patches/src/main/resources/addresources/values/youtube/strings.xml
+@@ -1719,6 +1719,8 @@ Automotive layout
+     <!-- layout.statusbar.hideStatusBarPatch -->
+     <string name="morphe_hide_status_bar_title">Hide status bar</string>
+     <string name="morphe_hide_status_bar_summary">Hides the system status bar. Swipe down from the top edge to show it for a moment</string>
++    <string name="morphe_hide_status_bar_on_scroll_title">Hide status bar when scrolling</string>
++    <string name="morphe_hide_status_bar_on_scroll_summary">Hides the system status bar while scrolling down, together with the navigation bar, and shows it again when scrolling up. Uses the scroll hiding of the \'Navigation bar\' patch</string>
+     <string name="morphe_hide_status_bar_avoid_cutout_title">Keep player below display cutout</string>
+     <string name="morphe_hide_status_bar_avoid_cutout_summary">Moves the portrait video player below the display cutout when the status bar is hidden, leaving an empty bar at the top. Turn this off to let the video fill the screen behind the cutout</string>
+     <string name="morphe_fix_status_bar_layout_title">Fix status bar covering the top bars</string>

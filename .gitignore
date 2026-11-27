@@ -1,0 +1,5 @@
+build/
+*.mpp
+*.jar
+*.dex
+.DS_Store

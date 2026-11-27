@@ -49,7 +49,7 @@ cp "$OUT/dex-patch/classes.dex" "$OUT/pkg/classes.dex"
 mkdir -p "$OUT/pkg/META-INF"
 cat > "$OUT/pkg/META-INF/MANIFEST.MF" <<EOF
 Manifest-Version: 1.0
-Name: Muse YouTube Patches
+Name: YouTube追加パッチ
 Description: Standalone YouTube patch: Hide status bar on scroll
 Version: $VERSION
 Author: Muse patches

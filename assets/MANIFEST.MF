@@ -1,5 +1,5 @@
 Manifest-Version: 1.0
-Name: Muse Patches
+Name: YouTube追加パッチ
 Description: Standalone X patches: Copy post text and Save to Muse (share menu + post header buttons), Copy media URL
 Version: 0.6.2
 Author: Muse patches

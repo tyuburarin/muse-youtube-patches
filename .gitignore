@@ -3,3 +3,4 @@ build/
 *.jar
 *.dex
 .DS_Store
+release/
